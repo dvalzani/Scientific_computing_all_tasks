@@ -217,7 +217,7 @@ On terminal:
 Compile the code:
 
 ```
- gcc -02 vector_sum.c -o vector_sum
+ gcc -O2 vector_sum.c -o vector_sum
 
 ```
 Run the code, then write N from the options:
@@ -404,7 +404,7 @@ On terminal:
 Compile the code:
 
 ```
- gcc -02 matrix_mul.c -o matrix_mul
+ gcc -O2 matrix_mul.c -o matrix_mul
 
 ```
 Run the code, then write N from the options:
