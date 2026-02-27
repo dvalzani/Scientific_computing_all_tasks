@@ -349,11 +349,14 @@ int main(void) {
 
 **1) Printed on the terminal:**
 ```
-Integrale numerico I  = 1.9052386904823926
+Integral on [0, pi/2] using trapezoidal rule:
+
+Integrale numerico I  = 1.9052386904814171
 
 Integrale esatto  I* = 1.9052386904826757
 
-Errore relativo      = -1.4854784069484595e-13
+Errore relativo      = -6.6058269965196814e-13
+
 ```
 **2) I tried to use the long double instead of double, but nothing changed. So I decided to calculate che integral value with a different method, using Simpson (error∼O($h^4$)) method instead the trapezoidal one(error∼O($h^2$)):**
 ```
