@@ -33,15 +33,17 @@ static inline double f(double x) {
 }
 
 /* Regola dei trapezi su [a,b] con M sottointervalli (M >= 1) */
-double trapezoidal_integral(double (*func)(double), double a, double b, long long M) {
+static double trapezoidal_integral(double (*func)(double), double a, double b, long long M) {
     if (M < 1) M = 1;
-    const double h = (b - a) / (double)M;
 
+    const double h = (b - a) / (double)M;
     double sum = 0.5 * (func(a) + func(b));
+
     for (long long k = 1; k < M; ++k) {
-        double xk = a + h * (double)k;
+        const double xk = a + h * (double)k;
         sum += func(xk);
     }
+
     return h * sum;
 }
 
@@ -72,6 +74,97 @@ static void remove_all_spaces(char *s) {
 }
 
 /*
+  Valuta un "term" che può essere:
+  - numero puro: "2.7", "-1.23"
+  - pi: "pi", "-pi"
+  - prodotto con pi: "2*pi", "2pi", "-3*pi", "1.5*pi"
+  - pi per coeff: "pi*2", "-pi*2"
+  NOTE: non supporta "2*pi*3" (intenzionalmente semplice)
+*/
+static double eval_term(const char *term, int *ok) {
+    *ok = 1;
+    if (term == NULL || term[0] == '\0') {
+        *ok = 0;
+        return 0.0;
+    }
+
+    // Cerca "pi"
+    const char *pi_pos = strstr(term, "pi");
+    if (!pi_pos) {
+        // solo numero
+        char *endp = NULL;
+        errno = 0;
+        double v = strtod(term, &endp);
+        if (errno != 0 || endp == term || *endp != '\0') {
+            *ok = 0;
+            return 0.0;
+        }
+        return v;
+    }
+
+    // Copia locale modificabile
+    char tmp[256];
+    strncpy(tmp, term, sizeof(tmp));
+    tmp[sizeof(tmp) - 1] = '\0';
+
+    // Caso "pi" o "-pi"
+    if (strcmp(tmp, "pi") == 0)  return MY_PI;
+    if (strcmp(tmp, "-pi") == 0) return -MY_PI;
+
+    // Caso "pi*X" o "-pi*X"
+    if (strncmp(tmp, "pi*", 3) == 0) {
+        const char *rhs = tmp + 3;
+        char *endp = NULL;
+        errno = 0;
+        double c = strtod(rhs, &endp);
+        if (errno != 0 || endp == rhs || *endp != '\0') {
+            *ok = 0;
+            return 0.0;
+        }
+        return MY_PI * c;
+    }
+    if (strncmp(tmp, "-pi*", 4) == 0) {
+        const char *rhs = tmp + 4;
+        char *endp = NULL;
+        errno = 0;
+        double c = strtod(rhs, &endp);
+        if (errno != 0 || endp == rhs || *endp != '\0') {
+            *ok = 0;
+            return 0.0;
+        }
+        return -MY_PI * c;
+    }
+
+    // Caso "X*pi" oppure "Xpi" (accettiamo anche senza '*')
+    char *p = strstr(tmp, "pi");
+    if (!p) {
+        *ok = 0;
+        return 0.0;
+    }
+    *p = '\0'; // tronca prima di "pi"
+
+    // tmp ora contiene qualcosa come "2*" oppure "2" oppure "-3*" ecc.
+    size_t len = strlen(tmp);
+    if (len > 0 && tmp[len - 1] == '*') {
+        tmp[len - 1] = '\0';
+    }
+
+    // se rimane vuoto -> coeff = 1
+    if (tmp[0] == '\0') {
+        return MY_PI;
+    }
+
+    char *endp = NULL;
+    errno = 0;
+    double c = strtod(tmp, &endp);
+    if (errno != 0 || endp == tmp || *endp != '\0') {
+        *ok = 0;
+        return 0.0;
+    }
+    return c * MY_PI;
+}
+
+/*
   Parse numeri tipo:
   - "1.23"
   - "pi", "-pi"
@@ -83,9 +176,12 @@ static void remove_all_spaces(char *s) {
   - ignora spazi
   - supporta un solo 'pi' e una sola divisione '/'
 */
-int parse_math_expr(const char *input, double *out) {
+static int parse_math_expr(const char *input, double *out) {
+    if (input == NULL || out == NULL) return 0;
+
     char buf[256];
     if (strlen(input) >= sizeof(buf)) return 0;
+
     strcpy(buf, input);
     trim_spaces(buf);
     remove_all_spaces(buf);
@@ -95,111 +191,50 @@ int parse_math_expr(const char *input, double *out) {
     // Gestisco eventuale divisione "/"
     char *slash = strchr(buf, '/');
     char left[256], right[256];
+
     if (slash) {
         *slash = '\0';
         strncpy(left, buf, sizeof(left));
-        left[sizeof(left)-1] = '\0';
+        left[sizeof(left) - 1] = '\0';
+
         strncpy(right, slash + 1, sizeof(right));
-        right[sizeof(right)-1] = '\0';
+        right[sizeof(right) - 1] = '\0';
     } else {
         strncpy(left, buf, sizeof(left));
-        left[sizeof(left)-1] = '\0';
+        left[sizeof(left) - 1] = '\0';
         right[0] = '\0';
     }
 
-    // Funzione interna: valuta "term" che può contenere pi e moltiplicazioni
-    // Esempi: "pi", "-pi", "2*pi", "pi*2", "1.5*pi", "-3*pi"
-    // Oppure solo numero: "2.7"
-    auto double eval_term(const char *term, int *ok) {
-        *ok = 1;
-        if (term[0] == '\0') { *ok = 0; return 0.0; }
-
-        // Cerca "pi"
-        const char *pi_pos = strstr(term, "pi");
-        if (!pi_pos) {
-            // solo numero
-            char *endp = NULL;
-            errno = 0;
-            double v = strtod(term, &endp);
-            if (errno != 0 || endp == term || *endp != '\0') { *ok = 0; return 0.0; }
-            return v;
-        }
-
-        // Se c'è pi, sostituiamo: valore = coeff * MY_PI
-        // term può essere:
-        //   "pi" / "-pi"
-        //   "<coeff>*pi"  o "<coeff>pi" (accettiamo anche senza '*')
-        //   "pi*<coeff>"
-        //   "<coeff>*pi*<coeff2>" -> non supportato (teniamolo semplice)
-        char tmp[256];
-        strncpy(tmp, term, sizeof(tmp));
-        tmp[sizeof(tmp)-1] = '\0';
-
-        // Caso "pi" o "-pi"
-        if (strcmp(tmp, "pi") == 0) return MY_PI;
-        if (strcmp(tmp, "-pi") == 0) return -MY_PI;
-
-        // Caso "pi*X"
-        if (strncmp(tmp, "pi*", 3) == 0) {
-            const char *rhs = tmp + 3;
-            char *endp = NULL;
-            errno = 0;
-            double c = strtod(rhs, &endp);
-            if (errno != 0 || endp == rhs || *endp != '\0') { *ok = 0; return 0.0; }
-            return MY_PI * c;
-        }
-        if (strncmp(tmp, "-pi*", 4) == 0) {
-            const char *rhs = tmp + 4;
-            char *endp = NULL;
-            errno = 0;
-            double c = strtod(rhs, &endp);
-            if (errno != 0 || endp == rhs || *endp != '\0') { *ok = 0; return 0.0; }
-            return -MY_PI * c;
-        }
-
-        // Caso "X*pi" o "Xpi" o "X*pi" con segno
-        // Rimuoviamo la parte "pi" e optional '*'
-        char *p = strstr(tmp, "pi");
-        if (!p) { *ok = 0; return 0.0; }
-        *p = '\0'; // tronca prima di pi
-
-        // ora tmp contiene qualcosa come "2*" oppure "2" oppure "-3*" ecc.
-        size_t len = strlen(tmp);
-        if (len > 0 && tmp[len-1] == '*') tmp[len-1] = '\0';
-
-        // se rimane vuoto, coeff = 1
-        if (tmp[0] == '\0') return MY_PI;
-
-        char *endp = NULL;
-        errno = 0;
-        double c = strtod(tmp, &endp);
-        if (errno != 0 || endp == tmp || *endp != '\0') { *ok = 0; return 0.0; }
-        return c * MY_PI;
-    }
-
-    int ok1 = 0, ok2 = 1;
+    int ok1 = 0;
     double v1 = eval_term(left, &ok1);
     if (!ok1) return 0;
 
     if (slash) {
+        int ok2 = 0;
         double v2 = eval_term(right, &ok2);
         if (!ok2 || v2 == 0.0) return 0;
+
         *out = v1 / v2;
         return 1;
-    } else {
-        *out = v1;
-        return 1;
     }
+
+    *out = v1;
+    return 1;
 }
 
 /* Legge una linea da stdin in modo sicuro */
 static int read_line(const char *prompt, char *buf, size_t buflen) {
-    printf("%s", prompt);
-    fflush(stdout);
+    if (prompt) {
+        printf("%s", prompt);
+        fflush(stdout);
+    }
+
     if (!fgets(buf, (int)buflen, stdin)) return 0;
+
     // rimuovi newline
     size_t n = strlen(buf);
-    if (n > 0 && buf[n-1] == '\n') buf[n-1] = '\0';
+    if (n > 0 && buf[n - 1] == '\n') buf[n - 1] = '\0';
+
     return 1;
 }
 
@@ -212,7 +247,9 @@ int main(void) {
     // N
     long long N = 0;
     while (1) {
-        if (!read_line("Enter N (number of sampling points, >= 2): ", line, sizeof(line))) return EXIT_FAILURE;
+        if (!read_line("Enter N (number of sampling points, >= 2): ", line, sizeof(line))) {
+            return EXIT_FAILURE;
+        }
         char *endp = NULL;
         errno = 0;
         N = strtoll(line, &endp, 10);
@@ -223,7 +260,9 @@ int main(void) {
     // x_inf
     double x_inf = 0.0;
     while (1) {
-        if (!read_line("Enter x_inf (e.g. -1, 0, -pi/2, -3*pi/4): ", line, sizeof(line))) return EXIT_FAILURE;
+        if (!read_line("Enter x_inf (e.g. -1, 0, -pi/2, -3*pi/4): ", line, sizeof(line))) {
+            return EXIT_FAILURE;
+        }
         if (parse_math_expr(line, &x_inf)) break;
         printf("Invalid x_inf. Try again (allowed: numbers, pi, pi/2, 2*pi, 3*pi/4, ...).\n");
     }
@@ -231,7 +270,9 @@ int main(void) {
     // x_sup
     double x_sup = 0.0;
     while (1) {
-        if (!read_line("Enter x_sup (e.g. 2, pi/2, pi, 3*pi/2): ", line, sizeof(line))) return EXIT_FAILURE;
+        if (!read_line("Enter x_sup (e.g. 2, pi/2, pi, 3*pi/2): ", line, sizeof(line))) {
+            return EXIT_FAILURE;
+        }
         if (parse_math_expr(line, &x_sup) && x_sup > x_inf) break;
         printf("Invalid x_sup (must be > x_inf). Try again.\n");
     }
@@ -239,7 +280,9 @@ int main(void) {
     // output filename
     char outname[256];
     while (1) {
-        if (!read_line("Enter output filename (e.g. fx_data.txt): ", outname, sizeof(outname))) return EXIT_FAILURE;
+        if (!read_line("Enter output filename (e.g. fx_data.txt): ", outname, sizeof(outname))) {
+            return EXIT_FAILURE;
+        }
         trim_spaces(outname);
         if (outname[0] != '\0') break;
         printf("Invalid filename. Try again.\n");
@@ -247,8 +290,11 @@ int main(void) {
 
     // M for integral
     long long M_for_integral = 1000000LL;
-    if (!read_line("Enter M for trapezoidal integral on [0, pi/2] (press ENTER for default 1000000): ", line, sizeof(line)))
+    if (!read_line("Enter M for trapezoidal integral on [0, pi/2] (press ENTER for default 1000000): ",
+                   line, sizeof(line))) {
         return EXIT_FAILURE;
+    }
+
     trim_spaces(line);
     if (line[0] != '\0') {
         char *endp = NULL;
@@ -270,8 +316,8 @@ int main(void) {
 
     const double h_sample = (x_sup - x_inf) / (double)(N - 1);
     for (long long i = 0; i < N; ++i) {
-        double x = x_inf + h_sample * (double)i;
-        double fx = f(x);
+        const double x = x_inf + h_sample * (double)i;
+        const double fx = f(x);
         fprintf(fout, "%.16f %.16f\n", x, fx);
     }
     fclose(fout);
@@ -280,8 +326,14 @@ int main(void) {
     const double a = 0.0;
     const double b = 0.5 * MY_PI;
     const double I_num = trapezoidal_integral(f, a, b, M_for_integral);
+
+    // Integrale esatto:
+    // ∫ exp(x) cos(x) dx = (exp(x) (sin(x) + cos(x))) / 2 + C
+    // Quindi su [0, pi/2]:
+    // I* = [exp(pi/2)*(1+0)/2] - [exp(0)*(0+1)/2] = (exp(pi/2) - 1)/2
     const double I_true = (exp(0.5 * MY_PI) - 1.0) / 2.0;
-    const double rel_err = I_num / I_true - 1.0;
+
+    const double rel_err = (I_num / I_true) - 1.0;
 
     printf("\nSaved output file: %s\n", outname);
     printf("Integral on [0, pi/2] using trapezoidal rule:\n");
@@ -291,9 +343,6 @@ int main(void) {
 
     return EXIT_SUCCESS;
 }
-
-}
-
 ```
 
 ### Answers to the questions of Task 04
